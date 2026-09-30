@@ -1,0 +1,7 @@
+numpy==1.23 
+scipy==1.10
+matplotlib==3.9.4
+pandas==2.2.3
+scikit-learn==1.6.1
+biopython==1.85
+rdkit==2024.3.2

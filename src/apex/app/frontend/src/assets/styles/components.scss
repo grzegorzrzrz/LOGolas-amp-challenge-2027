@@ -1,0 +1,11 @@
+@tailwind components;
+
+@layer components {
+    .section-wrapper {
+        @apply max-w-3xl w-full mx-auto py-16 px-4 md:px-8 lg:px-0
+    }
+
+    .nav-shift {
+        @apply pt-24
+    }
+}
