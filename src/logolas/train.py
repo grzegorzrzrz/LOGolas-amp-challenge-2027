@@ -15,7 +15,7 @@ from CPLDiff.utils.CPLDiffDataset import XYDataset
 from CPLDiff.utils.utils import extract
 from transformers import EsmTokenizer, EsmModel
 
-from logolasmap import (
+from .logolasmap import (
     MultiLayerLinEAS, get_all_layernorms,
     get_capture_hook, captured_activations,
     MonotonicTimeWarp,

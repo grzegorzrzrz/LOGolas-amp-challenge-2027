@@ -1,142 +1,63 @@
-# AMP Challenge 2027
+# LOGolas — AMP Challenge 2027 Submission
 
-> International competition for generative AI in antimicrobial peptide design.
+**Authors:** Grzegorz Siudak, Paweł Skierś, Kamil Deja
 
-Antimicrobial resistance is one of the most pressing global health challenges. This competition invites participants to develop generative models that design novel antimicrobial peptides (AMPs) with activity against a panel of clinically relevant bacterial strains, including multi-drug resistant ESKAPE pathogens.
+---
 
-## Submission Requirements
-
-### Minimum (benchmark participation)
-- Abstract summarizing the method
-- Library of 50,000 designed AMPs
-- Ranked top-100 candidates with selection/ranking documentation
-- Short summary of training data, external databases, and any filters applied
-- GitHub repository (private is fine) with model weights and inference code; grant read access to [@RasmusML](https://github.com/RasmusML) and [@szymczakpau](https://github.com/szymczakpau)
-
-### Full (co-authorship eligibility)
-All of the above, plus:
-- Public GitHub repository with model weights, inference code, and usage docs
-- Permissive OSI-approved license (MIT, BSD-3-Clause, or Apache 2.0)
-- Uses **[`uv`](https://docs.astral.sh/uv/concepts/projects/init/#projects)** for dependency management (include `uv.lock` and a defined Python version)
-- Entry point runnable via `uv run generate` generating the 50,000-member library and top-100 list; any additional arguments must have defaults
-- Fixed default random seed (identical output on repeated runs)
-- Full training data disclosure; any non-public data must be released under a permissive license
-
-## Sequence Requirements
-
-Generated sequences must:
-
-- Use only the 20 standard proteinogenic amino acids (`ACDEFGHIKLMNPQRSTVWY`)
-- Be between 8 and 50 residues long
-- Be unique (no duplicates)
-- Be linear with free termini (no terminal modifications, including amidation)
-- Exclude noncanonical amino acids, stapled peptides, peptidomimetics, and chemically modified variants (lipidated, glycosylated, PEGylated, dendrimeric, etc.)
-
-The full 50,000-sequence library must additionally contain no sequences identical to known antibacterial peptides in `data/antibacterial.fasta`. The top-100 list is held to a stricter standard: no sequence may exceed 80% sequence identity (Levenshtein ratio) with any sequence in that reference set.
-
-## Getting Started
-
-This repository also serves as a working example — see [src/amp_challenge_2027/generate.py](src/amp_challenge_2027/generate.py) for a complete implementation that meets all requirements.
-
-The steps below walk through building a minimal submission. Replace `my-model` with your model name throughout.
-
-### 1. Initialize the project
+## Quick start
 
 ```bash
-uv init --package my-model
-cd my-model
-```
-
-### 2. Add the entry point
-
-In `pyproject.toml`, add a `[project.scripts]` section:
-
-```toml
-[project.scripts]
-generate = "my_model.generate:main"
-```
-
-Note: to add package dependencies, use `uv add <package>` instead of editing `pyproject.toml` directly.
-
-### 3. Implement `generate.py`
-
-Running the entry point produces two files in a `generate/` subdirectory:
-
-```
-generate/
-  library.fasta  ← full 50,000-sequence library
-  top.fasta      ← top-100 ranked sequences
-```
-
-
-See [src/amp_challenge_2027/generate.py](src/amp_challenge_2027/generate.py) for a complete example.
-
-### 4. Run locally
-
-Install dependencies and test your script:
-
-```bash
+uv sync
 uv run generate
 ```
 
-Optional arguments (must have defaults):
+---
+## Abstract
+LOGolas is an inference-time activation steering framework for antimicrobial peptide (AMP) generation that extends the steering approach of Legolas. It is built on the frozen CPL-Diff latent diffusion model and requires no retraining.
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--n-sequences` | `50000` | Number of sequences to generate |
-| `--top-k` | `100` | Number of top-ranked sequences to write |
-| `--seed` | `42` | Random seed for reproducibility |
-| `--length` | `50` | Length of each generated sequence |
+Unlike standard activation steering, LOGolas parameterizes the intervention as a continuous affine transformation. Rather than learning a static transformation matrix, we learn its matrix logarithm: a Lie-algebra generator **G** for every LayerNorm activation in the denoiser. The intervention is applied as the matrix exponential **exp(Δ·G)**, where the scalar Δ is a continuous steering strength and Δ = 0 recovers the unmodified model.
 
-### 5. Verify
+The generators are trained on experimentally measured minimum inhibitory concentrations (MICs), converted into a normalized log₂ potency score. We sample pairs of peptides with different potencies, noise their latent embeddings to a given diffusion step, and pass both through the frozen denoiser. At each LayerNorm, exp(Δ·G) is trained to map the activations of one peptide onto those of the other, using a Wasserstein plus cosine loss. Here Δ is the difference between the two potencies after a jointly learned monotonic time warp. Because internal representations shift along the generative trajectory, we train 20 independent sets of generators and time warps, each covering a window of the diffusion process (t = 100 … 2000). Only the generators and time warps are trained; the denoiser is never updated.
 
-Push your project (including `uv.lock`) to a **public** GitHub repository, then run the validator:
+At generation time, steering is closed-loop. Every 50 diffusion steps, the partially denoised latent is decoded into a sequence and scored by an APEX predictor ensemble. The steering strength Δ is set to the difference between the time-warped target potency and the time-warped current potency, clamped at zero. The intervention therefore weakens as the sequence approaches the target activity and switches off once it is reached.
 
-```bash
-uv run python scripts/verify_submission.py <github-url>
-```
+## Data Description
+**Base CPL-Diff Training Data.** The foundational CPL-Diff model was trained on a large corpus of sequences assembled from public AMP databases, including APD3, CAMPR4, dbAMP2, LAMP2, DRAMP 3.0, DBAASP v3, and GRAMP.
 
+**Steering Map Data.** The steering maps (Lie-algebra generators) and the monotonic time warps are trained on a proprietary dataset comprising AMPs tested against 11 bacterial strains (the training dataset of the APEX Predictor). To train the steering maps, we filtered this dataset for MIC measurements against *E. coli*. Peptides that were not tested against this specific strain were removed, and right-censored/inactive MIC measurements were capped at a maximum of 256 µM.
 
-### 6. Submit
+## Top Candidates Selection Procedure
+Following the generation of a 50,000-member peptide library, candidates are traversed in ascending order of their predicted MIC. The selection of the top 100 candidates (`create_top_100`) is governed by a strict filtering and ranking pipeline:
 
-To submit, head to the Kaggle competition page: https://www.kaggle.com/competitions/amp-challenge
+**1. Novelty Filter:**
+Every generated candidate must have a Levenshtein similarity ratio of ≤ 0.80 against all 39,448 known sequences in the provided `antibacterial.fasta` reference set. Peptides exceeding this similarity threshold are discarded.
 
-## Validation
+**2. Physicochemical Developability Filter:**
+Inspired by the biologically informed boundaries defined in the OmegAMP paper, candidates are filtered to retain only those falling within expert-defined ranges known to favor synthesizability, stability, and broad-spectrum activity:
+*   **Length:** 10 to 30 amino acids.
+*   **Net Charge:** +2.0 to +10.0 (calculated at neutral pH as K + R − D − E + 0.1·H).
+*   **Hydrophobicity:** −0.5 to 0.8 (mean per-residue hydrophobicity on the Eisenberg consensus scale).
 
-Verify your submission with:
+**3. Ranking:**
+Surviving peptides that pass both the novelty and developability filters are ranked by their mean predicted MIC across all 11 bacterial strains, as evaluated by the APEX Predictor ensemble.
 
-```bash
-uv run python scripts/verify_submission.py <github-url>
-```
+**4. Fallback Mechanism:**
+If fewer than 100 peptides pass both filters, the remaining slots are backfilled with the best-MIC peptides that clear the Novelty Filter (never relaxed) but fall outside the developability window.
 
-This clones your repo, installs dependencies, generates the full library and ranked top-100 into `generate/library.fasta` and `generate/top.fasta`, verifies both files, then generates them again to confirm the output is reproducible.
+***
 
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `url` | — | GitHub repository URL (required positional) |
-| `--branch` | repo default | Git branch to clone |
-| `--dir` | `submission/` | Directory to clone into |
-| `--extra` | — | Optional [uv](https://docs.astral.sh/uv/concepts/projects/init/#projects) extras to install (repeatable) |
-| `--antibacterial-fasta` | `data/antibacterial.fasta` | FASTA file of known antibacterial sequences to check for overlap |
+## References
+1. Luo, Z., Geng, A., Wei, L., Zou, Q., Cui, F., Zhang, Z. (2025). CPL-Diff: A Diffusion Model for De Novo Design of Functional Peptide Sequences with Fixed Length. *Advanced Science*, 12, 2412926. https://doi.org/10.1002/advs.202412926
+2. Siudak, G., Szymczak, P., Szczurek, E., Deja, K. (2026). Activity is in the Activations: Inference-Time Steering of Peptide Models for Antimicrobial Design. In: Ceci, M., et al. *Machine Learning and Knowledge Discovery in Databases. Research Track. ECML PKDD 2026*. Lecture Notes in Computer Science, vol 16942. Springer, Cham. https://doi.org/10.1007/978-3-032-37657-2_21
+3. Wan, F., Torres, M.D.T., Peng, J. et al. (2024). Deep-learning-enabled antibiotic discovery through molecular de-extinction. *Nature Biomedical Engineering*, 8, 854–871. https://doi.org/10.1038/s41551-024-01201-x
+4. Soares, D., Hetzel, L., Szymczak, P., Torres, M.D.T., Sommer, J., de la Fuente-Nunez, C., Theis, F., Günnemann, S., Szczurek, E. (2026). OmegAMP: Targeted AMP Discovery via Biologically Informed Generation. *arXiv preprint*, arXiv:2504.17247. https://arxiv.org/abs/2504.17247
 
-## Starter Kits
+## License
 
-The following starter kits are compatible with this submission format:
+Three licenses apply. Full license texts are provided in the `LICENSE` file at each relevant location.
 
-- [ampdiffusion-starter-kit](https://github.com/szczurek-lab/ampdiffusion-starter-kit)
-- [hydramp-starter-kit](https://github.com/szczurek-lab/hydramp-starter-kit)
+* **LOGolas code** (everything not listed below): MIT License, © 2026 Grzegorz Siudak. See `LICENSE`.
+* **`src/apple/wasserstein.py`**: modified Apple Inc. software, © 2025 Apple Inc., distributed under Apple's license. See `src/apple/LICENSE`.
+* **`apex/` and `data/training/training.csv`**: distributed under the Penn Software APEX license, © 2022 The Trustees of the University of Pennsylvania. **Non-profit research use only.** See `apex/LICENSE`.
 
-## Project Structure
-
-```
-amp-challenge-2027/
-├── checkpoint/
-│   └── weights.csv          # Trained model weights
-├── scripts/
-│   └── verify_submission.py # Submission validator
-├── src/
-│   └── amp_challenge_2027/
-│       └── generate.py      # Entry point: sequence generation logic
-├── pyproject.toml
-└── uv.lock
-```
+The MIT License for LOGolas code does not apply to the third-party Apple or Penn Software APEX components listed above.

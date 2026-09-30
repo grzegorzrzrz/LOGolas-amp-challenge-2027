@@ -17,7 +17,7 @@ from transformers import AutoTokenizer, AutoModelForMaskedLM
 from CPLDiff.models.Denoiser import Denoiser
 from CPLDiff.utils.utils import set_seed, extract
 
-from logolasmap import (
+from .logolasmap import (
     apply_steering_only_hook,
     MultiLayerLinEAS,
     get_all_layernorms,
@@ -683,6 +683,10 @@ def main():
                 for seq, mic in zip(new_seqs, new_mics):
                     total_saved += 1
                     f.write(f">seq_{total_saved} | mode={args.steering_mode} | MIC={mic:.2f}\n{seq}\n")
+
+        # Free the ~timesteps pre-generated noise tensors before the next batch allocates its own
+        del x_T, step_noise, final_x
+        torch.cuda.empty_cache()
 
         batch_idx += 1
         print(f"  Accepted {len(new_seqs)} | rejected: {dict(rejected)} "
